@@ -399,6 +399,8 @@ def _normalize_columns_to_canonical(df: pd.DataFrame) -> pd.DataFrame:
     }
 
     mapping = {}
+    used_targets = {}  # Track which canonical names have been used
+    
     for c in df.columns:
         n = norm(c)
         # Try exact/alias matches
@@ -411,10 +413,20 @@ def _normalize_columns_to_canonical(df: pd.DataFrame) -> pd.DataFrame:
             if any(n.startswith(a) for a in aliases):
                 matched = canon
                 break
+        
         # Final cleanup: keep original if nothing matched
         if matched:
             # Title-case canonical for display consistency
-            mapping[c] = matched.title()
+            target_name = matched.title()
+            
+            # Handle duplicate target names by adding suffix
+            if target_name in used_targets:
+                used_targets[target_name] += 1
+                target_name = f"{target_name}_{used_targets[target_name]}"
+            else:
+                used_targets[target_name] = 0
+            
+            mapping[c] = target_name
         else:
             mapping[c] = c if isinstance(c, str) else str(c)
 
@@ -744,49 +756,6 @@ def chattering_detection(df, ts_col, tag_col='tag', repeats_threshold=5, window_
         return pd.DataFrame(out).sort_values('max_repeats_in_window', ascending=False)
     return pd.DataFrame()
 
-def generate_recommendations(df, ts_col, tag_col=None, priority_col=None):
-    """Generate ISA-18.2 compliant recommendations with confidence scoring"""
-    recommendations = []
-    
-    if not tag_col or tag_col not in df.columns:
-        return pd.DataFrame(recommendations)
-    
-    # Chattering analysis for deadband recommendations
-    chatter_tags = chattering_detection(df, ts_col, tag_col, repeats_threshold=5)
-    for _, row in chatter_tags.iterrows():
-        confidence = min(0.95, 0.5 + (row['max_repeats_in_window'] - 5) * 0.1)
-        recommendations.append({
-            'tag': row['tag'],
-            'issue': 'Chattering alarm',
-            'recommendation': 'Increase deadband/time delay',
-            'confidence': confidence,
-            'evidence': f"{row['max_repeats_in_window']} repeats in 10-min window",
-            'action_type': 'deadband_tuning',
-            'priority': 'High' if row['max_repeats_in_window'] > 10 else 'Medium'
-        })
-    
-    # Priority rebalancing recommendations
-    if priority_col and priority_col in df.columns:
-        prio_dist = df[priority_col].astype(str).value_counts(normalize=True) * 100
-        high_prio_tags = df[df[priority_col].astype(str).str.contains('1|high|critical', case=False, na=False)]
-        
-        if not high_prio_tags.empty:
-            # Analyze high priority alarms for potential downgrading
-            tag_response_times = high_prio_tags.groupby(tag_col).size()
-            for tag, count in tag_response_times.items():
-                if count > 50:  # Frequent high priority alarms
-                    confidence = min(0.9, 0.6 + (count - 50) * 0.005)
-                    recommendations.append({
-                        'tag': tag,
-                        'issue': 'Over-prioritized alarm',
-                        'recommendation': 'Consider priority downgrade',
-                        'confidence': confidence,
-                        'evidence': f"{count} high-priority occurrences",
-                        'action_type': 'priority_adjustment',
-                        'priority': 'Medium'
-                    })
-    
-    return pd.DataFrame(recommendations)
 
 def standing_alarms_heuristic(df, ts_col, tag_col=None, min_duration_hours=24):
     """Enhanced standing alarm detection"""
@@ -824,7 +793,7 @@ Analyze historical alarm data, evaluate performance against ISA-18.2 benchmarks,
 """)
 
 # Create tabs for different views
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📁 File Explorer", "📈 Analytics", "💡 Recommendations"])
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📁 File Explorer", "📈 Analytics"])
 
 with st.sidebar:
     st.header("🔍 Data Source Configuration")
@@ -1595,103 +1564,6 @@ if files:
                         st.write("- Verify file contains proper CSV/Excel data")
                         st.write("- Try reducing sample size in sidebar settings")
     
-    # Recommendations Tab
-    with tab4:
-        st.header("💡 Alarm Rationalization Recommendations")
-        
-        if not files:
-            st.info("No files available for recommendation generation.")
-        else:
-            # Generate recommendations for all files
-            all_recommendations = []
-            
-            for file_path in files:
-                try:
-                    df = read_table(str(file_path), nrows=sample_size)
-                    ts_col = detect_timestamp_column(df)
-                    tag_col = detect_tag_column(df)
-                    priority_col = detect_priority_column(df)
-                    
-                    if ts_col and tag_col:
-                        recs = generate_recommendations(df, ts_col, tag_col, priority_col)
-                        if not recs.empty:
-                            recs['source_file'] = file_path.name
-                            all_recommendations.append(recs)
-                except Exception as e:
-                    st.error(f"Error generating recommendations for {file_path.name}: {e}")
-            
-            if all_recommendations:
-                combined_recs = pd.concat(all_recommendations, ignore_index=True)
-                
-                # Filter options
-                st.subheader("🔧 Recommendation Filters")
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    action_filter = st.multiselect(
-                        "Action Type", 
-                        combined_recs['action_type'].unique(),
-                        default=combined_recs['action_type'].unique()
-                    )
-                
-                with col2:
-                    priority_filter = st.multiselect(
-                        "Priority", 
-                        combined_recs['priority'].unique(),
-                        default=combined_recs['priority'].unique()
-                    )
-                
-                with col3:
-                    min_confidence = st.slider("Min Confidence", 0.0, 1.0, 0.5)
-                
-                # Apply filters
-                filtered_recs = combined_recs[
-                    (combined_recs['action_type'].isin(action_filter)) &
-                    (combined_recs['priority'].isin(priority_filter)) &
-                    (combined_recs['confidence'] >= min_confidence)
-                ]
-                
-                st.subheader("📋 Actionable Recommendations")
-                
-                if not filtered_recs.empty:
-                    # Display recommendations in cards
-                    for _, rec in filtered_recs.iterrows():
-                        with st.container():
-                            col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
-                            
-                            with col1:
-                                st.write(f"**{rec['tag']}**")
-                                st.write(f"*{rec['issue']}*")
-                                st.write(f"**Action:** {rec['recommendation']}")
-                            
-                            with col2:
-                                st.write(f"**Evidence:** {rec['evidence']}")
-                                st.write(f"**Source:** {rec['source_file']}")
-                            
-                            with col3:
-                                confidence_color = "🟢" if rec['confidence'] > 0.8 else "🟡" if rec['confidence'] > 0.6 else "🔴"
-                                st.metric("Confidence", f"{rec['confidence']:.2f} {confidence_color}")
-                            
-                            with col4:
-                                priority_color = "🔴" if rec['priority'] == 'High' else "🟡"
-                                st.write(f"**Priority**")
-                                st.write(f"{rec['priority']} {priority_color}")
-                            
-                            st.markdown("---")
-                    
-                    # Export recommendations
-                    st.subheader("📤 Export Recommendations")
-                    csv_data = filtered_recs.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        "Download Recommendations CSV",
-                        data=csv_data,
-                        file_name=f"alarm_recommendations_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                        mime="text/csv"
-                    )
-                else:
-                    st.info("No recommendations match the current filters.")
-            else:
-                st.info("No recommendations generated. Ensure files have proper timestamp and tag columns.")
 
 else:
     st.info("No files to analyze in the selected folder.")
