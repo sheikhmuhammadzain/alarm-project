@@ -131,6 +131,74 @@ def _normalize_columns_to_canonical(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns=mapping)
     return df
 
+def _apply_detected_header(df: pd.DataFrame) -> pd.DataFrame:
+    """If the file was exported with a banner and the real header appears
+    a few rows below (causing columns like 'Unnamed: 1'), detect and apply
+    the correct header row.
+
+    Heuristics:
+    - If many columns are 'Unnamed' or the canonical header names are present
+      inside the first N rows, treat that row as the header and drop rows above it.
+    - Keep this conservative so normal files are untouched.
+    """
+    try:
+        if df is None or df.empty:
+            return df
+
+        colnames = [str(c) for c in df.columns]
+        unnamed_count = sum(1 for c in colnames if str(c).strip().lower().startswith('unnamed'))
+
+        # Only attempt fix if it's likely broken
+        likely_broken = unnamed_count >= max(2, len(colnames) // 2) or 'Event Time' not in colnames
+        if not likely_broken:
+            return df
+
+        # Canonical header candidates to search for in early rows
+        canonical_candidates = {
+            'event time', 'location tag', 'source', 'condition', 'action',
+            'priority', 'description', 'value', 'units'
+        }
+
+        def _norm(s: str) -> str:
+            s = str(s)
+            return " ".join(s.replace('_', ' ').strip().split()).lower()
+
+        header_row_idx = None
+        max_scan = min(50, len(df))
+        for i in range(max_scan):
+            row_vals = [str(v).strip() for v in df.iloc[i].tolist()]
+            norm_vals = [_norm(v) for v in row_vals]
+            hits = sum(1 for v in norm_vals if v in canonical_candidates)
+            if hits >= 3 and any(tok in norm_vals for tok in ['event time', 'timestamp', 'time stamp']):
+                header_row_idx = i
+                break
+
+        if header_row_idx is None:
+            return df
+
+        # Build new header from that row
+        raw_headers = [" ".join(str(v).split()) for v in df.iloc[header_row_idx].tolist()]
+        # Replace empty/placeholder cells
+        cleaned_headers = [h if h and h not in ['-', '—', 'None', 'nan'] else f"Column_{idx+1}" for idx, h in enumerate(raw_headers)]
+
+        # Ensure uniqueness
+        used = {}
+        unique_headers = []
+        for h in cleaned_headers:
+            base = h
+            count = used.get(base, 0)
+            final = base if count == 0 else f"{base}_{count+1}"
+            used[base] = count + 1
+            unique_headers.append(final)
+
+        # Drop rows up to header and set columns
+        df = df.iloc[header_row_idx + 1:].copy()
+        df.columns = unique_headers
+        return df
+    except Exception:
+        # In worst case, return original frame
+        return df
+
 def detect_timestamp_column(df: pd.DataFrame):
     """Detect the most likely timestamp column"""
     if df is None or df.empty:
@@ -204,21 +272,43 @@ def read_uploaded_file(file_content: bytes, filename: str, sample_size: int = No
             for encoding in ['utf-8', 'utf-8-sig', 'windows-1252', 'latin-1']:
                 try:
                     content = file_content.decode(encoding)
-                    df = pd.read_csv(io.StringIO(content), nrows=sample_size)
+                    # First try fast engine
+                    try:
+                        df = pd.read_csv(io.StringIO(content), nrows=sample_size)
+                    except Exception:
+                        # Fallback: robust parser with delimiter sniffing and bad-line skipping
+                        df = pd.read_csv(
+                            io.StringIO(content),
+                            nrows=sample_size,
+                            engine='python',
+                            sep=None,
+                            on_bad_lines='skip',
+                        )
                     break
                 except UnicodeDecodeError:
                     continue
             else:
                 # Ultimate fallback
                 content = file_content.decode('latin-1', errors='replace')
-                df = pd.read_csv(io.StringIO(content), nrows=sample_size)
+                try:
+                    df = pd.read_csv(io.StringIO(content), nrows=sample_size)
+                except Exception:
+                    df = pd.read_csv(
+                        io.StringIO(content),
+                        nrows=sample_size,
+                        engine='python',
+                        sep=None,
+                        on_bad_lines='skip',
+                    )
         
         elif filename.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(io.BytesIO(file_content), nrows=sample_size)
         else:
             raise ValueError("Unsupported file format")
         
-        # Clean column names
+        # Fix common export pattern where the real header is inside the data
+        df = _apply_detected_header(df)
+        # Clean and normalize column names
         df.columns = [" ".join(str(c).split()) for c in df.columns]
         df = _normalize_columns_to_canonical(df)
         
@@ -392,20 +482,45 @@ def load_auto_discovered_file(file_info: Dict, sample_size: int = None) -> pd.Da
             # Try multiple encodings for CSV files
             for encoding in ['utf-8', 'utf-8-sig', 'windows-1252', 'latin-1']:
                 try:
-                    df = pd.read_csv(file_path, encoding=encoding, nrows=sample_size)
+                    # First try fast C engine
+                    try:
+                        df = pd.read_csv(file_path, encoding=encoding, nrows=sample_size)
+                    except Exception:
+                        # Fallback to robust Python engine with delimiter sniffing and bad-line skipping
+                        df = pd.read_csv(
+                            file_path,
+                            encoding=encoding,
+                            nrows=sample_size,
+                            engine='python',
+                            sep=None,
+                            on_bad_lines='skip',
+                        )
                     break
                 except UnicodeDecodeError:
                     continue
             else:
                 # Ultimate fallback
-                df = pd.read_csv(file_path, encoding='latin-1', errors='replace', nrows=sample_size)
+                try:
+                    df = pd.read_csv(file_path, encoding='latin-1', errors='replace', nrows=sample_size)
+                except Exception:
+                    df = pd.read_csv(
+                        file_path,
+                        encoding='latin-1',
+                        errors='replace',
+                        nrows=sample_size,
+                        engine='python',
+                        sep=None,
+                        on_bad_lines='skip',
+                    )
         
         elif file_info['extension'] in ['.xlsx', '.xls']:
             df = pd.read_excel(file_path, nrows=sample_size)
         else:
             raise ValueError(f"Unsupported file format: {file_info['extension']}")
         
-        # Clean column names
+        # Fix common export pattern where the real header is inside the data
+        df = _apply_detected_header(df)
+        # Clean and normalize column names
         df.columns = [" ".join(str(c).split()) for c in df.columns]
         df = _normalize_columns_to_canonical(df)
         
@@ -466,6 +581,9 @@ async def upload_file(file: UploadFile = File(...)):
         
         return response_data
     
+    except HTTPException as he:
+        # Preserve intended HTTP status codes (e.g., 400/404)
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -607,10 +725,10 @@ async def analyze_file(file_id: str, request: AnalysisRequest = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/charts/alarm-rate/{file_id}")
-async def get_alarm_rate_chart(file_id: str):
+async def get_alarm_rate_chart(file_id: str, sample_size: int | None = Query(None, ge=1)):
     """Generate alarm rate performance chart"""
     try:
-        df, filename, source_type = get_file_data(file_id)
+        df, filename, source_type = get_file_data(file_id, sample_size)
         
         ts_col = detect_timestamp_column(df)
         if not ts_col:
@@ -659,10 +777,10 @@ async def get_alarm_rate_chart(file_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/charts/top-contributors/{file_id}")
-async def get_top_contributors_chart(file_id: str, top_n: int = Query(15, ge=5, le=50)):
+async def get_top_contributors_chart(file_id: str, top_n: int = Query(15, ge=5, le=50), sample_size: int | None = Query(None, ge=1)):
     """Generate top contributors chart"""
     try:
-        df, filename, source_type = get_file_data(file_id)
+        df, filename, source_type = get_file_data(file_id, sample_size)
         
         tag_col = detect_tag_column(df)
         if not tag_col:
@@ -711,10 +829,10 @@ async def get_top_contributors_chart(file_id: str, top_n: int = Query(15, ge=5, 
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/charts/priority-distribution/{file_id}")
-async def get_priority_distribution_chart(file_id: str):
+async def get_priority_distribution_chart(file_id: str, sample_size: int | None = Query(None, ge=1)):
     """Generate priority distribution pie chart"""
     try:
-        df, filename, source_type = get_file_data(file_id)
+        df, filename, source_type = get_file_data(file_id, sample_size)
         
         priority_col = detect_priority_column(df)
         if not priority_col:
@@ -751,10 +869,10 @@ async def get_priority_distribution_chart(file_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/charts/pareto-analysis/{file_id}")
-async def get_pareto_chart(file_id: str):
+async def get_pareto_chart(file_id: str, sample_size: int | None = Query(None, ge=1)):
     """Generate Pareto analysis chart for top contributors"""
     try:
-        df, filename, source_type = get_file_data(file_id)
+        df, filename, source_type = get_file_data(file_id, sample_size)
         
         tag_col = detect_tag_column(df)
         if not tag_col:
@@ -800,10 +918,10 @@ async def get_pareto_chart(file_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/charts/flood-analysis/{file_id}")
-async def get_flood_analysis_chart(file_id: str):
+async def get_flood_analysis_chart(file_id: str, sample_size: int | None = Query(None, ge=1)):
     """Generate flood analysis chart"""
     try:
-        df, filename, source_type = get_file_data(file_id)
+        df, filename, source_type = get_file_data(file_id, sample_size)
         
         ts_col = detect_timestamp_column(df)
         if not ts_col:
@@ -967,13 +1085,10 @@ async def get_performance_comparison_chart():
 
 @app.get("/charts/distribution-histogram/{file_id}")
 async def get_distribution_histogram(file_id: str):
-    """Generate alarm rate distribution histogram"""
-    if file_id not in uploaded_files_storage:
-        raise HTTPException(status_code=404, detail="File not found")
-    
+    """Generate alarm rate distribution histogram (supports uploaded and auto-discovered files)"""
     try:
-        df = uploaded_files_storage[file_id]['dataframe']
-        filename = uploaded_files_storage[file_id]['filename']
+        # Support both uploaded and auto-discovered files
+        df, filename, _source_type = get_file_data(file_id)
         
         ts_col = detect_timestamp_column(df)
         if not ts_col:
@@ -1024,13 +1139,10 @@ async def get_distribution_histogram(file_id: str):
 
 @app.get("/charts/rolling-average/{file_id}")
 async def get_rolling_average_chart(file_id: str, window_hours: int = Query(24, ge=1, le=168)):
-    """Generate rolling average trend chart"""
-    if file_id not in uploaded_files_storage:
-        raise HTTPException(status_code=404, detail="File not found")
-    
+    """Generate rolling average trend chart (supports uploaded and auto-discovered files)"""
     try:
-        df = uploaded_files_storage[file_id]['dataframe']
-        filename = uploaded_files_storage[file_id]['filename']
+        # Support both uploaded and auto-discovered files
+        df, filename, _source_type = get_file_data(file_id)
         
         ts_col = detect_timestamp_column(df)
         if not ts_col:
@@ -1044,18 +1156,19 @@ async def get_rolling_average_chart(file_id: str, window_hours: int = Query(24, 
         timestamps = pd.to_datetime(metrics['hourly_data']['timestamps'])
         counts = np.array(metrics['hourly_data']['counts'])
         
-        if len(counts) < window_hours:
-            raise HTTPException(status_code=400, detail=f"Not enough data for {window_hours}h window")
-        
         # Calculate rolling average
         rolling_avg = pd.Series(counts).rolling(window_hours, min_periods=1).mean()
+        # Ensure native Python lists for JSON/Plotly compatibility
+        ts_list = timestamps.tolist()
+        counts_list = counts.tolist() if isinstance(counts, np.ndarray) else list(counts)
+        rolling_list = rolling_avg.astype(float).tolist()
         
         fig = go.Figure()
         
         # Original data
         fig.add_trace(go.Scatter(
-            x=timestamps,
-            y=counts,
+            x=ts_list,
+            y=counts_list,
             mode='lines',
             name='Hourly Alarms',
             line=dict(color='lightblue', width=1),
@@ -1064,8 +1177,8 @@ async def get_rolling_average_chart(file_id: str, window_hours: int = Query(24, 
         
         # Rolling average
         fig.add_trace(go.Scatter(
-            x=timestamps,
-            y=rolling_avg,
+            x=ts_list,
+            y=rolling_list,
             mode='lines',
             name=f'{window_hours}h Rolling Average',
             line=dict(color='orange', width=3)
@@ -1083,12 +1196,15 @@ async def get_rolling_average_chart(file_id: str, window_hours: int = Query(24, 
         return {
             "chart": chart_json,
             "rolling_average_data": {
-                "timestamps": timestamps.strftime('%Y-%m-%d %H:%M:%S').tolist(),
-                "rolling_values": rolling_avg.tolist(),
+                "timestamps": pd.to_datetime(ts_list).strftime('%Y-%m-%d %H:%M:%S').tolist(),
+                "rolling_values": rolling_list,
                 "window_hours": window_hours
             }
         }
     
+    except HTTPException as he:
+        # Preserve 4xx errors like insufficient data or missing columns
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1171,6 +1287,9 @@ async def get_dashboard_summary():
             "isa_benchmarks": ISA_BENCHMARKS
         }
     
+    except HTTPException as he:
+        # Preserve intended HTTP status codes (e.g., 404 for missing file)
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1222,13 +1341,9 @@ async def analyze_batch(request: AnalysisRequest = None):
 
 @app.get("/file/{file_id}/preview")
 async def get_file_preview(file_id: str, rows: int = Query(10, ge=1, le=100)):
-    """Get preview of file data"""
-    if file_id not in uploaded_files_storage:
-        raise HTTPException(status_code=404, detail="File not found")
-    
+    """Get preview of file data (supports uploaded and auto-discovered files)"""
     try:
-        df = uploaded_files_storage[file_id]['dataframe']
-        filename = uploaded_files_storage[file_id]['filename']
+        df, filename, _source_type = get_file_data(file_id)
         
         preview_df = df.head(rows)
         
@@ -1265,13 +1380,9 @@ async def get_file_preview(file_id: str, rows: int = Query(10, ge=1, le=100)):
 
 @app.get("/file/{file_id}/statistics")
 async def get_file_statistics(file_id: str):
-    """Get detailed statistics for a file"""
-    if file_id not in uploaded_files_storage:
-        raise HTTPException(status_code=404, detail="File not found")
-    
+    """Get detailed statistics for a file (supports uploaded and auto-discovered files)"""
     try:
-        df = uploaded_files_storage[file_id]['dataframe']
-        filename = uploaded_files_storage[file_id]['filename']
+        df, filename, _source_type = get_file_data(file_id)
         
         # Basic statistics
         basic_stats = {
@@ -1366,13 +1477,9 @@ async def get_isa_benchmarks():
 
 @app.get("/insights/{file_id}")
 async def get_insights(file_id: str):
-    """Generate actionable insights for a specific file"""
-    if file_id not in uploaded_files_storage:
-        raise HTTPException(status_code=404, detail="File not found")
-    
+    """Generate actionable insights for a specific file (supports uploaded and auto-discovered)"""
     try:
-        df = uploaded_files_storage[file_id]['dataframe']
-        filename = uploaded_files_storage[file_id]['filename']
+        df, filename, _source_type = get_file_data(file_id)
         
         ts_col = detect_timestamp_column(df)
         tag_col = detect_tag_column(df)
@@ -1437,13 +1544,10 @@ async def get_insights(file_id: str):
 
 @app.get("/export/metrics/{file_id}")
 async def export_metrics(file_id: str, format: str = Query("json", regex="^(json|csv)$")):
-    """Export detailed metrics for a file"""
-    if file_id not in uploaded_files_storage:
-        raise HTTPException(status_code=404, detail="File not found")
-    
+    """Export detailed metrics for a file (supports uploaded and auto-discovered files)"""
     try:
-        df = uploaded_files_storage[file_id]['dataframe']
-        filename = uploaded_files_storage[file_id]['filename']
+        # Support both uploaded and auto-discovered files
+        df, filename, _source_type = get_file_data(file_id)
         
         ts_col = detect_timestamp_column(df)
         tag_col = detect_tag_column(df)
@@ -1483,12 +1587,9 @@ async def export_metrics(file_id: str, format: str = Query("json", regex="^(json
 # Advanced Analysis Endpoints
 @app.get("/advanced/chattering/{file_id}")
 async def detect_chattering_alarms(file_id: str, window_minutes: int = Query(10, ge=1, le=60), threshold: int = Query(5, ge=2, le=20)):
-    """Detect chattering alarms (repeated alarms in short windows)"""
-    if file_id not in uploaded_files_storage:
-        raise HTTPException(status_code=404, detail="File not found")
-    
+    """Detect chattering alarms (repeated alarms in short windows) - supports uploaded and auto-discovered"""
     try:
-        df = uploaded_files_storage[file_id]['dataframe']
+        df, _filename, _source_type = get_file_data(file_id)
         ts_col = detect_timestamp_column(df)
         tag_col = detect_tag_column(df)
         
@@ -1539,12 +1640,9 @@ async def detect_chattering_alarms(file_id: str, window_minutes: int = Query(10,
 
 @app.get("/advanced/standing-alarms/{file_id}")
 async def detect_standing_alarms(file_id: str, min_duration_hours: int = Query(24, ge=1, le=168)):
-    """Detect standing alarms (long-duration active alarms)"""
-    if file_id not in uploaded_files_storage:
-        raise HTTPException(status_code=404, detail="File not found")
-    
+    """Detect standing alarms (long-duration active alarms) - supports uploaded and auto-discovered"""
     try:
-        df = uploaded_files_storage[file_id]['dataframe']
+        df, _filename, _source_type = get_file_data(file_id)
         ts_col = detect_timestamp_column(df)
         tag_col = detect_tag_column(df)
         

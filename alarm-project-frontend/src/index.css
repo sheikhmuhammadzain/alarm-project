@@ -1,0 +1,145 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ISA Alarm Analyzer Design System - Professional Industrial Dashboard */
+
+@layer base {
+  :root {
+    /* ISA Color Scheme - Primary industrial colors */
+    --isa-primary: 207 67% 41%;        /* #1f77b4 - Professional blue */
+    --isa-success: 147 50% 36%;        /* #2E8B57 - Success green */
+    --isa-warning: 33 100% 50%;        /* #FF8C00 - Warning orange */
+    --isa-danger: 348 83% 47%;         /* #DC143C - Error red */
+    
+    /* Professional neutrals */
+    --isa-neutral-50: 210 17% 98%;     /* #F8F9FA - Light background */
+    --isa-neutral-100: 210 17% 95%;
+    --isa-neutral-200: 210 16% 90%;
+    --isa-neutral-300: 210 14% 80%;
+    --isa-neutral-400: 208 7% 46%;     /* #6C757D - Medium gray */
+    --isa-neutral-500: 210 11% 35%;
+    --isa-neutral-600: 210 11% 24%;    /* #343A40 - Dark gray */
+    --isa-neutral-700: 210 11% 18%;
+    --isa-neutral-800: 210 11% 12%;
+    --isa-neutral-900: 210 11% 8%;
+    
+    /* Shadcn compatible variables */
+    --background: 0 0% 100%;
+    --foreground: var(--isa-neutral-600);
+
+    --card: 0 0% 100%;
+    --card-foreground: var(--isa-neutral-600);
+
+    --popover: 0 0% 100%;
+    --popover-foreground: var(--isa-neutral-600);
+
+    --primary: var(--isa-primary);
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: var(--isa-neutral-100);
+    --secondary-foreground: var(--isa-neutral-600);
+
+    --muted: var(--isa-neutral-50);
+    --muted-foreground: var(--isa-neutral-400);
+
+    --accent: var(--isa-neutral-100);
+    --accent-foreground: var(--isa-neutral-600);
+
+    --destructive: var(--isa-danger);
+    --destructive-foreground: 0 0% 100%;
+
+    --border: var(--isa-neutral-200);
+    --input: var(--isa-neutral-200);
+    --ring: var(--isa-primary);
+
+    --radius: 0.5rem;
+    
+    /* ISA Status indicators */
+    --status-good: var(--isa-success);
+    --status-acceptable: var(--isa-warning);
+    --status-poor: var(--isa-danger);
+    
+    /* Gradients for enhanced visuals */
+    --gradient-primary: linear-gradient(135deg, hsl(var(--isa-primary)), hsl(var(--isa-primary) / 0.8));
+    --gradient-success: linear-gradient(135deg, hsl(var(--isa-success)), hsl(var(--isa-success) / 0.8));
+    --gradient-warning: linear-gradient(135deg, hsl(var(--isa-warning)), hsl(var(--isa-warning) / 0.8));
+    --gradient-danger: linear-gradient(135deg, hsl(var(--isa-danger)), hsl(var(--isa-danger) / 0.8));
+    
+    /* Shadows */
+    --shadow-sm: 0 1px 3px hsl(var(--isa-neutral-900) / 0.1);
+    --shadow-md: 0 4px 12px hsl(var(--isa-neutral-900) / 0.15);
+    --shadow-lg: 0 10px 30px hsl(var(--isa-neutral-900) / 0.2);
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    /* Dark mode overrides for ISA theme */
+    --background: var(--isa-neutral-900);
+    --foreground: 0 0% 90%;
+
+    --card: var(--isa-neutral-800);
+    --card-foreground: 0 0% 90%;
+
+    --popover: var(--isa-neutral-800);
+    --popover-foreground: 0 0% 90%;
+
+    --primary: var(--isa-primary);
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: var(--isa-neutral-700);
+    --secondary-foreground: 0 0% 90%;
+
+    --muted: var(--isa-neutral-800);
+    --muted-foreground: 0 0% 65%;
+
+    --accent: var(--isa-neutral-700);
+    --accent-foreground: 0 0% 90%;
+
+    --destructive: var(--isa-danger);
+    --destructive-foreground: 0 0% 100%;
+
+    --border: var(--isa-neutral-700);
+    --input: var(--isa-neutral-700);
+    --ring: var(--isa-primary);
+    
+    --sidebar-background: var(--isa-neutral-800);
+    --sidebar-foreground: 0 0% 90%;
+    --sidebar-primary: var(--isa-primary);
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: var(--isa-neutral-700);
+    --sidebar-accent-foreground: 0 0% 90%;
+    --sidebar-border: var(--isa-neutral-700);
+    --sidebar-ring: var(--isa-primary);
+    
+    /* Update shadows for dark mode */
+    --shadow-sm: 0 1px 3px hsl(0 0% 0% / 0.3);
+    --shadow-md: 0 4px 12px hsl(0 0% 0% / 0.4);
+    --shadow-lg: 0 10px 30px hsl(0 0% 0% / 0.5);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
