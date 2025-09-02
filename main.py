@@ -429,6 +429,17 @@ if ALARM_DATA_DIR:
     except Exception:
         DATA_ROOT = Path(ALARM_DATA_DIR)
 
+# Fallback: if env var is not set, but a folder named 'ALARM_DATA_DIR' exists
+# inside the project root, use it as the data root. This matches the typical
+# repo layout where project data is kept in a dedicated subfolder.
+if DATA_ROOT is None:
+    try:
+        fallback_dir = PROJECT_ROOT / "ALARM_DATA_DIR"
+        if fallback_dir.exists() and fallback_dir.is_dir():
+            DATA_ROOT = fallback_dir
+    except Exception:
+        DATA_ROOT = None
+
 # Supported file extensions for auto-discovery
 SUPPORTED_EXTENSIONS = ['.csv', '.xlsx', '.xls']
 
