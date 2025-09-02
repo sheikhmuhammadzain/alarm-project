@@ -25,8 +25,8 @@ export const getApiInfo = () =>
 export const getFiles = (): Promise<FileInfo[]> =>
   apiClient.get('/files').then(res => res.data);
 
-export const getAutoFiles = (): Promise<FolderGroup[]> =>
-  apiClient.get('/auto-files').then(res => {
+export const getAutoFiles = (signal?: AbortSignal): Promise<FolderGroup[]> =>
+  apiClient.get('/auto-files', { signal }).then(res => {
     const data = res.data as { folders?: Record<string, FileInfo[]> };
     const folders = data?.folders || {};
     const groups: FolderGroup[] = Object.entries(folders).map(([folder_name, files]) => ({
@@ -37,17 +37,17 @@ export const getAutoFiles = (): Promise<FolderGroup[]> =>
     return groups;
   });
 
-export const refreshAutoFiles = () =>
-  apiClient.post('/auto-files/refresh').then(res => res.data);
+export const refreshAutoFiles = (signal?: AbortSignal) =>
+  apiClient.post('/auto-files/refresh', undefined, { signal }).then(res => res.data);
 
-export const getAutoFilesByFolder = (folderName: string): Promise<FileInfo[]> =>
-  apiClient.get(`/auto-files/${folderName}`).then(res => {
+export const getAutoFilesByFolder = (folderName: string, signal?: AbortSignal): Promise<FileInfo[]> =>
+  apiClient.get(`/auto-files/${folderName}`, { signal }).then(res => {
     const data = res.data as { files?: FileInfo[] };
     return data?.files || [];
   });
 
-export const getAllFiles = (): Promise<FileInfo[]> =>
-  apiClient.get('/all-files').then(res => {
+export const getAllFiles = (signal?: AbortSignal): Promise<FileInfo[]> =>
+  apiClient.get('/all-files', { signal }).then(res => {
     const data = res.data as { files?: FileInfo[] };
     return data?.files || [];
   });
@@ -70,8 +70,8 @@ export const deleteAllFiles = () =>
   apiClient.delete('/files/all').then(res => res.data);
 
 // File Details
-export const getFilePreview = (fileId: string, rows: number = 10): Promise<FilePreview> =>
-  apiClient.get(`/file/${fileId}/preview?rows=${rows}`).then(res => {
+export const getFilePreview = (fileId: string, rows: number = 10, signal?: AbortSignal): Promise<FilePreview> =>
+  apiClient.get(`/file/${fileId}/preview?rows=${rows}`, { signal }).then(res => {
     const d = res.data;
     return {
       headers: d.columns,
@@ -80,8 +80,8 @@ export const getFilePreview = (fileId: string, rows: number = 10): Promise<FileP
     } as FilePreview;
   });
 
-export const getFileStatistics = (fileId: string): Promise<FileStatistics> =>
-  apiClient.get(`/file/${fileId}/statistics`).then(res => {
+export const getFileStatistics = (fileId: string, signal?: AbortSignal): Promise<FileStatistics> =>
+  apiClient.get(`/file/${fileId}/statistics`, { signal }).then(res => {
     const d: { basic_statistics: { filename: string; total_rows: number }; column_info: Array<{ column: string; data_type: string; unique_values: number; non_null_count: number }>; } = res.data;
     const basic = d.basic_statistics;
     const humanizeType = (t?: string): string => {
@@ -114,9 +114,10 @@ export const getFileStatistics = (fileId: string): Promise<FileStatistics> =>
 // Analysis
 export const analyzeFile = (
   fileId: string,
-  options: { sample_size?: number; show_advanced?: boolean } = {}
+  options: { sample_size?: number; show_advanced?: boolean } = {},
+  signal?: AbortSignal
 ): Promise<MetricsResponse> =>
-  apiClient.post(`/analyze/${fileId}`, options).then(res => {
+  apiClient.post(`/analyze/${fileId}`, options, { signal }).then(res => {
     const m: Partial<MetricsResponse> & { source_file?: string; total_alarms?: number; avg_alarms_per_hour?: number; isa_performance?: 'Good' | 'Acceptable' | 'Poor' | 'Unknown'; flood_percentage?: number } = res.data;
     return {
       file_id: fileId,
@@ -155,29 +156,29 @@ export const batchAnalyze = (): Promise<BatchAnalysisResult> =>
   });
 
 // Charts
-export const getAlarmRateChart = (fileId: string, sampleSize?: number): Promise<ChartResponse> =>
-  apiClient.get(`/charts/alarm-rate/${fileId}${typeof sampleSize === 'number' ? `?sample_size=${sampleSize}` : ''}`).then(res => res.data);
+export const getAlarmRateChart = (fileId: string, sampleSize?: number, signal?: AbortSignal): Promise<ChartResponse> =>
+  apiClient.get(`/charts/alarm-rate/${fileId}${typeof sampleSize === 'number' ? `?sample_size=${sampleSize}` : ''}`, { signal }).then(res => res.data);
 
-export const getTopContributorsChart = (fileId: string, topN: number = 15, sampleSize?: number): Promise<ChartResponse> =>
-  apiClient.get(`/charts/top-contributors/${fileId}?top_n=${topN}${typeof sampleSize === 'number' ? `&sample_size=${sampleSize}` : ''}`).then(res => res.data);
+export const getTopContributorsChart = (fileId: string, topN: number = 15, sampleSize?: number, signal?: AbortSignal): Promise<ChartResponse> =>
+  apiClient.get(`/charts/top-contributors/${fileId}?top_n=${topN}${typeof sampleSize === 'number' ? `&sample_size=${sampleSize}` : ''}`, { signal }).then(res => res.data);
 
-export const getPriorityDistributionChart = (fileId: string, sampleSize?: number): Promise<ChartResponse> =>
-  apiClient.get(`/charts/priority-distribution/${fileId}${typeof sampleSize === 'number' ? `?sample_size=${sampleSize}` : ''}`).then(res => res.data);
+export const getPriorityDistributionChart = (fileId: string, sampleSize?: number, signal?: AbortSignal): Promise<ChartResponse> =>
+  apiClient.get(`/charts/priority-distribution/${fileId}${typeof sampleSize === 'number' ? `?sample_size=${sampleSize}` : ''}`, { signal }).then(res => res.data);
 
-export const getParetoAnalysisChart = (fileId: string, sampleSize?: number): Promise<ChartResponse> =>
-  apiClient.get(`/charts/pareto-analysis/${fileId}${typeof sampleSize === 'number' ? `?sample_size=${sampleSize}` : ''}`).then(res => res.data);
+export const getParetoAnalysisChart = (fileId: string, sampleSize?: number, signal?: AbortSignal): Promise<ChartResponse> =>
+  apiClient.get(`/charts/pareto-analysis/${fileId}${typeof sampleSize === 'number' ? `?sample_size=${sampleSize}` : ''}`, { signal }).then(res => res.data);
 
-export const getFloodAnalysisChart = (fileId: string, sampleSize?: number): Promise<ChartResponse> =>
-  apiClient.get(`/charts/flood-analysis/${fileId}${typeof sampleSize === 'number' ? `?sample_size=${sampleSize}` : ''}`).then(res => res.data);
+export const getFloodAnalysisChart = (fileId: string, sampleSize?: number, signal?: AbortSignal): Promise<ChartResponse> =>
+  apiClient.get(`/charts/flood-analysis/${fileId}${typeof sampleSize === 'number' ? `?sample_size=${sampleSize}` : ''}`, { signal }).then(res => res.data);
 
 export const getPerformanceComparisonChart = (): Promise<{ alarm_rate_chart?: unknown; flood_rate_chart?: unknown }> =>
   apiClient.get('/charts/performance-comparison').then(res => res.data as { alarm_rate_chart?: unknown; flood_rate_chart?: unknown });
 
-export const getDistributionHistogramChart = (fileId: string): Promise<ChartResponse> =>
-  apiClient.get(`/charts/distribution-histogram/${fileId}`).then(res => res.data);
+export const getDistributionHistogramChart = (fileId: string, signal?: AbortSignal): Promise<ChartResponse> =>
+  apiClient.get(`/charts/distribution-histogram/${fileId}`, { signal }).then(res => res.data);
 
-export const getRollingAverageChart = (fileId: string, windowHours: number = 24): Promise<ChartResponse> =>
-  apiClient.get(`/charts/rolling-average/${fileId}?window_hours=${windowHours}`).then(res => res.data);
+export const getRollingAverageChart = (fileId: string, windowHours: number = 24, signal?: AbortSignal): Promise<ChartResponse> =>
+  apiClient.get(`/charts/rolling-average/${fileId}?window_hours=${windowHours}`, { signal }).then(res => res.data);
 
 // Dashboard
 export const getDashboardSummary = (): Promise<DashboardSummary> =>
@@ -199,8 +200,8 @@ export const getDashboardSummary = (): Promise<DashboardSummary> =>
   });
 
 // Insights
-export const getInsights = (fileId: string): Promise<InsightsResponse> =>
-  apiClient.get(`/insights/${fileId}`).then(res => {
+export const getInsights = (fileId: string, signal?: AbortSignal): Promise<InsightsResponse> =>
+  apiClient.get(`/insights/${fileId}`, { signal }).then(res => {
     const d: { insights?: string[]; metrics_summary?: { alarm_rate?: number; flood_percentage?: number } } = res.data;
     const categorize = (s: string) =>
       s?.startsWith('✅') ? 'success' :
@@ -226,9 +227,11 @@ export const exportMetrics = (fileId: string, format: 'json' | 'csv' = 'json'): 
 export const getChatteringAlarms = (
   fileId: string,
   windowMinutes: number = 10,
-  threshold: number = 5
+  threshold: number = 5,
+  signal?: AbortSignal
 ): Promise<ChatteringAlarm[]> =>
-  apiClient.get(`/advanced/chattering/${fileId}?window_minutes=${windowMinutes}&threshold=${threshold}`)
+  apiClient.get(`/advanced/chattering/${fileId}?window_minutes=${windowMinutes}&threshold=${threshold}`,
+    { signal })
     .then(res => {
       const items: Array<{ tag: string; max_repeats_in_window?: number; total_occurrences?: number }> = (res.data?.chattering_alarms || []);
       return items.map((it) => {
@@ -245,9 +248,11 @@ export const getChatteringAlarms = (
 
 export const getStandingAlarms = (
   fileId: string,
-  minDurationHours: number = 24
+  minDurationHours: number = 24,
+  signal?: AbortSignal
 ): Promise<StandingAlarm[]> =>
-  apiClient.get(`/advanced/standing-alarms/${fileId}?min_duration_hours=${minDurationHours}`)
+  apiClient.get(`/advanced/standing-alarms/${fileId}?min_duration_hours=${minDurationHours}`,
+    { signal })
     .then(res => {
       const items: Array<{ tag: string; span_hours?: number; first_occurrence: string; last_occurrence?: string }> = (res.data?.standing_alarms || []);
       const now = Date.now();

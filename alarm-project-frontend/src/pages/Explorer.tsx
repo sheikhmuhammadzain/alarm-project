@@ -33,7 +33,7 @@ import {
   deleteFile,
   deleteAllFiles,
 } from '@/api/client';
-import { FolderOpen, BarChart3, RefreshCw, Download, Lightbulb, Zap, Clock, ChevronLeft, ChevronRight, Upload, Trash2 } from 'lucide-react';
+import { FolderOpen, BarChart3, RefreshCw, Download, Lightbulb, Zap, Clock, ChevronLeft, ChevronRight, Upload, Trash2, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import type { FileInfo, InsightItem, ChatteringAlarm, StandingAlarm } from '@/api/types';
@@ -79,23 +79,30 @@ export default function Explorer() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [fileToDelete, setFileToDelete] = useState<FileInfo | null>(null);
+  const [slowLoad, setSlowLoad] = useState(false);
+
+  // Prefer backend-provided error detail when available (axios response.data.detail)
+  const getErrMsg = (e: unknown): string => {
+    const anyE = e as any;
+    return (anyE?.response?.data?.detail as string) || (anyE?.message as string) || 'Request failed';
+  };
 
   const { data: folders = [], error: foldersError, isLoading: foldersLoading } = useQuery({
     queryKey: ['auto-files'],
-    queryFn: getAutoFiles,
+    queryFn: ({ signal }) => getAutoFiles(signal),
   });
 
-  const { data: folderFiles = [], isLoading: filesLoading } = useQuery<FileInfo[]>({
+  const { data: folderFiles = [], isLoading: filesLoading, error: folderFilesError } = useQuery<FileInfo[]>({
     queryKey: ['auto-folder', selectedFolder],
     // cast to any to align with API typing differences for auto files
-    queryFn: () => (selectedFolder && selectedFolder !== '__uploaded__' ? getAutoFilesByFolder(selectedFolder) : Promise.resolve([] as FileInfo[])),
+    queryFn: ({ signal }) => selectedFolder && selectedFolder !== '__uploaded__' ? getAutoFilesByFolder(selectedFolder, signal) : Promise.resolve([] as FileInfo[]),
     enabled: !!selectedFolder && selectedFolder !== '__uploaded__',
   });
 
   // All files (for uploaded pseudo-folder and counters)
-  const { data: allFiles = [], isLoading: allFilesLoading } = useQuery<FileInfo[]>({
+  const { data: allFiles = [], isLoading: allFilesLoading, error: allFilesError } = useQuery<FileInfo[]>({
     queryKey: ['all-files'],
-    queryFn: getAllFiles,
+    queryFn: ({ signal }) => getAllFiles(signal),
   });
 
   const uploadedFiles = useMemo(() => allFiles.filter(f => f.source_type === 'uploaded'), [allFiles]);
@@ -146,105 +153,142 @@ export default function Explorer() {
     { key: 'filename', label: 'File Name', width: '5/6' },
   ];
 
-  const { data: preview, isLoading: previewLoading, error: previewError } = useQuery({
+  const { data: preview, isLoading: previewLoading, isFetching: previewFetching, error: previewError } = useQuery({
     queryKey: ['preview', activeId],
-    queryFn: () => (activeId ? getFilePreview(activeId, 50) : null),
+    queryFn: ({ signal }) => (activeId ? getFilePreview(activeId, 50, signal) : null),
     enabled: !!activeId && activeTab === 'data',
   });
 
-  const { data: stats, isLoading: statsLoading, error: statsError } = useQuery({
+  const { data: stats, isLoading: statsLoading, isFetching: statsFetching, error: statsError } = useQuery({
     queryKey: ['stats', activeId],
-    queryFn: () => (activeId ? getFileStatistics(activeId) : null),
+    queryFn: ({ signal }) => (activeId ? getFileStatistics(activeId, signal) : null),
     enabled: !!activeId && activeTab === 'stats',
   });
 
-  const { data: metrics, isLoading: metricsLoading, error: metricsError } = useQuery({
+  const { data: metrics, isLoading: metricsLoading, isFetching: metricsFetching, error: metricsError } = useQuery({
     queryKey: ['metrics', activeId],
-    queryFn: () => (activeId ? analyzeFile(activeId) : null),
+    queryFn: ({ signal }) => (activeId ? analyzeFile(activeId, {}, signal) : null),
     enabled: !!activeId && activeTab === 'analysis',
   });
 
   // Charts for active file
   const SAMPLE = 15000; // cap rows for heavy charts to avoid timeouts
 
-  const { data: rateChart, isLoading: rateLoading, error: rateError } = useQuery({
+  const { data: rateChart, isLoading: rateLoading, isFetching: rateFetching, error: rateError } = useQuery({
     queryKey: ['explorer-alarm-rate', activeId],
-    queryFn: () => (activeId ? getAlarmRateChart(activeId, SAMPLE) : null),
+    queryFn: ({ signal }) => (activeId ? getAlarmRateChart(activeId, SAMPLE, signal) : null),
     enabled: !!activeId && activeTab === 'analysis',
   });
 
-  const { data: topChart, isLoading: topLoading, error: topError } = useQuery({
+  const { data: topChart, isLoading: topLoading, isFetching: topFetching, error: topError } = useQuery({
     queryKey: ['explorer-top', activeId, topN],
-    queryFn: () => (activeId ? getTopContributorsChart(activeId, topN, SAMPLE) : null),
+    queryFn: ({ signal }) => (activeId ? getTopContributorsChart(activeId, topN, SAMPLE, signal) : null),
     enabled: !!activeId && activeTab === 'analysis',
   });
 
   // Additional charts
-  const { data: priorityChart, isLoading: priorityLoading, error: priorityError } = useQuery({
+  const { data: priorityChart, isLoading: priorityLoading, isFetching: priorityFetching, error: priorityError } = useQuery({
     queryKey: ['explorer-priority', activeId],
-    queryFn: () => (activeId ? getPriorityDistributionChart(activeId, SAMPLE) : null),
+    queryFn: ({ signal }) => (activeId ? getPriorityDistributionChart(activeId, SAMPLE, signal) : null),
     enabled: !!activeId && activeTab === 'analysis',
   });
 
-  const { data: paretoChart, isLoading: paretoLoading, error: paretoError } = useQuery({
+  const { data: paretoChart, isLoading: paretoLoading, isFetching: paretoFetching, error: paretoError } = useQuery({
     queryKey: ['explorer-pareto', activeId],
-    queryFn: () => (activeId ? getParetoAnalysisChart(activeId, SAMPLE) : null),
+    queryFn: ({ signal }) => (activeId ? getParetoAnalysisChart(activeId, SAMPLE, signal) : null),
     enabled: !!activeId && activeTab === 'analysis',
   });
 
-  const { data: floodChart, isLoading: floodLoading, error: floodError } = useQuery({
+  const { data: floodChart, isLoading: floodLoading, isFetching: floodFetching, error: floodError } = useQuery({
     queryKey: ['explorer-flood', activeId],
-    queryFn: () => (activeId ? getFloodAnalysisChart(activeId, SAMPLE) : null),
+    queryFn: ({ signal }) => (activeId ? getFloodAnalysisChart(activeId, SAMPLE, signal) : null),
     enabled: !!activeId && activeTab === 'analysis',
   });
 
   // Extra charts
-  const { data: histogramChart, isLoading: histLoading, error: histError } = useQuery({
+  const { data: histogramChart, isLoading: histLoading, isFetching: histFetching, error: histError } = useQuery({
     queryKey: ['explorer-histogram', activeId],
-    queryFn: () => (activeId ? getDistributionHistogramChart(activeId) : null),
+    queryFn: ({ signal }) => (activeId ? getDistributionHistogramChart(activeId, signal) : null),
     enabled: !!activeId && activeTab === 'analysis',
   });
 
-  const { data: rollingChart, isLoading: rollingLoading, error: rollingError } = useQuery({
+  const { data: rollingChart, isLoading: rollingLoading, isFetching: rollingFetching, error: rollingError } = useQuery({
     queryKey: ['explorer-rolling', activeId, windowHours],
-    queryFn: () => (activeId ? getRollingAverageChart(activeId, windowHours) : null),
+    queryFn: ({ signal }) => (activeId ? getRollingAverageChart(activeId, windowHours, signal) : null),
     enabled: !!activeId && activeTab === 'analysis',
   });
 
   // Insights
-  const { data: insights, isLoading: insightsLoading, error: insightsError } = useQuery({
+  const { data: insights, isLoading: insightsLoading, isFetching: insightsFetching, error: insightsError } = useQuery({
     queryKey: ['explorer-insights', activeId],
-    queryFn: () => (activeId ? getInsights(activeId) : null),
+    queryFn: ({ signal }) => (activeId ? getInsights(activeId, signal) : null),
     enabled: !!activeId && activeTab === 'insights',
   });
 
   // Advanced detections (active file)
-  const { data: chatteringData, isLoading: chatteringLoading, error: chatteringError } = useQuery<ChatteringAlarm[] | null>({
+  const { data: chatteringData, isLoading: chatteringLoading, isFetching: chatteringFetching, error: chatteringError } = useQuery<ChatteringAlarm[] | null>({
     queryKey: ['explorer-chattering', activeId, windowMinutes, threshold],
-    queryFn: () => (activeId ? getChatteringAlarms(activeId, windowMinutes, threshold) : null),
+    queryFn: ({ signal }) => (activeId ? getChatteringAlarms(activeId, windowMinutes, threshold, signal) : null),
     enabled: !!activeId && activeTab === 'advanced',
   });
 
-  const { data: standingData, isLoading: standingLoading, error: standingError } = useQuery<StandingAlarm[] | null>({
+  const { data: standingData, isLoading: standingLoading, isFetching: standingFetching, error: standingError } = useQuery<StandingAlarm[] | null>({
     queryKey: ['explorer-standing', activeId, minDurationHours],
-    queryFn: () => (activeId ? getStandingAlarms(activeId, minDurationHours) : null),
+    queryFn: ({ signal }) => (activeId ? getStandingAlarms(activeId, minDurationHours, signal) : null),
     enabled: !!activeId && activeTab === 'advanced',
   });
 
   // Compare selected files (analyze each)
   const compareEnabled = selectedIds.length > 1;
-  const { data: compareData, isLoading: compareLoading, error: compareError } = useQuery({
+  const { data: compareData, isLoading: compareLoading, isFetching: compareFetching, error: compareError } = useQuery({
     queryKey: ['explorer-compare', selectedIds.join('|')],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const idToName: Record<string, string> = Object.fromEntries((displayedFiles as FileInfo[]).map(f => [f.file_id, f.filename]));
       const results = await Promise.all(selectedIds.map(async (id) => {
-        const m = await analyzeFile(id);
+        const m = await analyzeFile(id, {}, signal);
         return { file_id: id, filename: idToName[id] || id, metrics: m };
       }));
       return results;
     },
     enabled: compareEnabled && activeTab === 'analysis',
   });
+
+  // Aggregate busy/error states for tab-level indicators
+  const dataTabBusy = previewLoading || previewFetching;
+  const dataTabError = !!previewError;
+  const statsTabBusy = statsLoading || statsFetching;
+  const statsTabError = !!statsError;
+  const analysisTabBusy =
+    metricsLoading || metricsFetching ||
+    rateLoading || rateFetching ||
+    topLoading || topFetching ||
+    priorityLoading || priorityFetching ||
+    paretoLoading || paretoFetching ||
+    floodLoading || floodFetching ||
+    histLoading || histFetching ||
+    rollingLoading || rollingFetching ||
+    compareLoading || compareFetching;
+  const analysisTabError = !!(metricsError || rateError || topError || priorityError || paretoError || floodError || histError || rollingError || compareError);
+  const insightsTabBusy = insightsLoading || insightsFetching;
+  const insightsTabError = !!insightsError;
+  const advancedTabBusy = chatteringLoading || chatteringFetching || standingLoading || standingFetching;
+  const advancedTabError = !!(chatteringError || standingError);
+
+  // Slow-loading indicator after 3s of continuous fetching on current tab
+  useEffect(() => {
+    const busy = activeTab === 'data' ? dataTabBusy
+      : activeTab === 'stats' ? statsTabBusy
+      : activeTab === 'analysis' ? analysisTabBusy
+      : activeTab === 'insights' ? insightsTabBusy
+      : advancedTabBusy;
+    if (busy) {
+      setSlowLoad(false);
+      const t = setTimeout(() => setSlowLoad(true), 3000);
+      return () => clearTimeout(t);
+    } else {
+      setSlowLoad(false);
+    }
+  }, [activeTab, dataTabBusy, statsTabBusy, analysisTabBusy, insightsTabBusy, advancedTabBusy]);
 
   const refreshMutation = useMutation({
     mutationFn: refreshAutoFiles,
@@ -441,9 +485,7 @@ export default function Explorer() {
 
       {foldersError && (
         <Alert variant="destructive">
-          <AlertDescription>
-            {foldersError instanceof Error ? foldersError.message : 'Failed to load folders'}
-          </AlertDescription>
+          <AlertDescription>{getErrMsg(foldersError)}</AlertDescription>
         </Alert>
       )}
 
@@ -473,6 +515,13 @@ export default function Explorer() {
                   value={fileSearch}
                   onChange={(e) => setFileSearch(e.target.value)}
                 />
+                {(selectedFolder === '__uploaded__' ? allFilesError : folderFilesError) && (
+                  <Alert variant="destructive">
+                    <AlertDescription>
+                      {getErrMsg(selectedFolder === '__uploaded__' ? allFilesError : folderFilesError)}
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Button size="sm" variant="ghost" onClick={() => setSelectedIds(displayedFiles.map(f => f.file_id))}>Select All</Button>
                   <Button size="sm" variant="ghost" onClick={() => setSelectedIds([])}>Clear</Button>
@@ -557,28 +606,48 @@ export default function Explorer() {
                 <TabsList className="grid grid-cols-5 w-full">
                   <TabsTrigger value="data" className="flex items-center gap-2">
                     Data
+                    {dataTabBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                    {dataTabError && !dataTabBusy && <span className="inline-block h-2 w-2 rounded-full bg-destructive" />}
                   </TabsTrigger>
-                  <TabsTrigger value="stats">Statistics</TabsTrigger>
+                  <TabsTrigger value="stats" className="flex items-center gap-2">
+                    Statistics
+                    {statsTabBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                    {statsTabError && !statsTabBusy && <span className="inline-block h-2 w-2 rounded-full bg-destructive" />}
+                  </TabsTrigger>
                   <TabsTrigger value="analysis" className="flex items-center gap-2">
                     <BarChart3 className="h-4 w-4" /> Analysis
+                    {analysisTabBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                    {analysisTabError && !analysisTabBusy && <span className="inline-block h-2 w-2 rounded-full bg-destructive" />}
                   </TabsTrigger>
                   <TabsTrigger value="insights" className="flex items-center gap-2">
                     <Lightbulb className="h-4 w-4" /> Insights
+                    {insightsTabBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                    {insightsTabError && !insightsTabBusy && <span className="inline-block h-2 w-2 rounded-full bg-destructive" />}
                   </TabsTrigger>
                   <TabsTrigger value="advanced" className="flex items-center gap-2">
                     <Zap className="h-4 w-4" /> Advanced
+                    {advancedTabBusy && <Loader2 className="h-3 w-3 animate-spin" />}
+                    {advancedTabError && !advancedTabBusy && <span className="inline-block h-2 w-2 rounded-full bg-destructive" />}
                   </TabsTrigger>
                 </TabsList>
+
+                {slowLoad && (
+                  <Alert variant="default">
+                    <AlertDescription className="flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Still loading… large files can take a while. Switching tabs or files cancels in-flight requests.
+                    </AlertDescription>
+                  </Alert>
+                )}
 
                 <TabsContent value="data" className="mt-4 space-y-3">
                   {previewLoading && <Skeleton className="h-48 w-full" />}
                   {previewError && (
                     <Alert variant="destructive">
-                      <AlertDescription>
-                        {previewError instanceof Error ? previewError.message : 'Failed to load preview'}
-                      </AlertDescription>
+                      <AlertDescription>{getErrMsg(previewError)}</AlertDescription>
                     </Alert>
                   )}
+
                   {preview && (
                     <>
                       <div className="rounded-md border border-border p-3">
@@ -637,11 +706,10 @@ export default function Explorer() {
                   {statsLoading && <Skeleton className="h-48 w-full" />}
                   {statsError && (
                     <Alert variant="destructive">
-                      <AlertDescription>
-                        {statsError instanceof Error ? statsError.message : 'Failed to load statistics'}
-                      </AlertDescription>
+                      <AlertDescription>{getErrMsg(statsError)}</AlertDescription>
                     </Alert>
                   )}
+
                   {stats && (
                     <div className="space-y-4">
                       <div className="grid grid-cols-3 gap-3">
@@ -679,11 +747,10 @@ export default function Explorer() {
                   {metricsLoading && <Skeleton className="h-40 w-full" />}
                   {metricsError && (
                     <Alert variant="destructive">
-                      <AlertDescription>
-                        {metricsError instanceof Error ? metricsError.message : 'Failed to load analysis'}
-                      </AlertDescription>
+                      <AlertDescription>{getErrMsg(metricsError)}</AlertDescription>
                     </Alert>
                   )}
+
                   {metrics && (
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                       <div className="rounded-lg border border-border bg-muted/30 p-3">
@@ -721,55 +788,61 @@ export default function Explorer() {
                       data={rateChart || undefined}
                       title="Alarm Rate Over Time"
                       isLoading={rateLoading}
-                      error={rateError instanceof Error ? rateError.message : null}
+                      error={rateError ? getErrMsg(rateError) : null}
                       className="min-w-0"
                       height={360}
                     />
+
                     <ChartWrapper
                       data={topChart || undefined}
                       title={`Top ${topN} Alarm Contributors`}
                       isLoading={topLoading}
-                      error={topError instanceof Error ? topError.message : null}
+                      error={topError ? getErrMsg(topError) : null}
                       className="min-w-0"
                       height={360}
                     />
+
                     <ChartWrapper
                       data={priorityChart || undefined}
                       title="Priority Distribution"
                       isLoading={priorityLoading}
-                      error={priorityError instanceof Error ? priorityError.message : null}
+                      error={priorityError ? getErrMsg(priorityError) : null}
                       className="min-w-0"
                       height={360}
                     />
+
                     <ChartWrapper
                       data={paretoChart || undefined}
                       title="Pareto Analysis"
                       isLoading={paretoLoading}
-                      error={paretoError instanceof Error ? paretoError.message : null}
+                      error={paretoError ? getErrMsg(paretoError) : null}
                       className="min-w-0"
                       height={360}
                     />
+
                     <ChartWrapper
                       data={floodChart || undefined}
                       title="Flood Analysis (10‑min windows)"
                       isLoading={floodLoading}
-                      error={floodError instanceof Error ? floodError.message : null}
+                      error={floodError ? getErrMsg(floodError) : null}
                       className="min-w-0"
                       height={360}
                     />
+
                     <ChartWrapper
                       data={histogramChart || undefined}
                       title="Alarm Rate Distribution Histogram"
                       isLoading={histLoading}
-                      error={histError instanceof Error ? histError.message : null}
+                      error={histError ? getErrMsg(histError) : null}
                       className="min-w-0"
                       height={360}
                     />
+
                     <ChartWrapper
                       data={rollingChart || undefined}
                       title={`${windowHours}-Hour Rolling Average Alarm Rate`}
                       isLoading={rollingLoading}
-                      error={rollingError instanceof Error ? rollingError.message : null}
+                      error={rollingError ? getErrMsg(rollingError) : null}
                       className="min-w-0"
                       height={360}
                     />
@@ -792,9 +865,7 @@ export default function Explorer() {
                         <Skeleton className="h-32 w-full" />
                       ) : compareError ? (
                         <Alert variant="destructive">
-                          <AlertDescription>
-                            {compareError instanceof Error ? compareError.message : 'Failed to compare files'}
-                          </AlertDescription>
+                          <AlertDescription>{getErrMsg(compareError)}</AlertDescription>
                         </Alert>
                       ) : compareData ? (
                         <DataTable
@@ -826,11 +897,10 @@ export default function Explorer() {
                   {insightsLoading && <Skeleton className="h-40 w-full" />}
                   {insightsError && (
                     <Alert variant="destructive">
-                      <AlertDescription>
-                        {insightsError instanceof Error ? insightsError.message : 'Failed to load insights'}
-                      </AlertDescription>
+                      <AlertDescription>{getErrMsg(insightsError)}</AlertDescription>
                     </Alert>
                   )}
+
                   {insights && (
                     <div className="space-y-4">
                       {/* Summary & Export */}
@@ -926,7 +996,7 @@ export default function Explorer() {
                     {chatteringLoading ? (
                       <Skeleton className="h-28 w-full" />
                     ) : chatteringError ? (
-                      <Alert variant="destructive"><AlertDescription>{chatteringError instanceof Error ? chatteringError.message : 'Failed to load chattering alarms'}</AlertDescription></Alert>
+                      <Alert variant="destructive"><AlertDescription>{getErrMsg(chatteringError)}</AlertDescription></Alert>
                     ) : chatteringData ? (
                       <DataTable
                         data={chatteringData}
@@ -951,7 +1021,7 @@ export default function Explorer() {
                     {standingLoading ? (
                       <Skeleton className="h-28 w-full" />
                     ) : standingError ? (
-                      <Alert variant="destructive"><AlertDescription>{standingError instanceof Error ? standingError.message : 'Failed to load standing alarms'}</AlertDescription></Alert>
+                      <Alert variant="destructive"><AlertDescription>{getErrMsg(standingError)}</AlertDescription></Alert>
                     ) : standingData ? (
                       <DataTable
                         data={standingData}
