@@ -420,6 +420,15 @@ file_discovery_lock = Lock()
 # Project root directory for auto-discovery
 PROJECT_ROOT = Path(__file__).parent
 
+# Optional single-folder data directory (set via environment variable)
+ALARM_DATA_DIR = os.environ.get('ALARM_DATA_DIR')
+DATA_ROOT = None
+if ALARM_DATA_DIR:
+    try:
+        DATA_ROOT = Path(ALARM_DATA_DIR).expanduser().resolve()
+    except Exception:
+        DATA_ROOT = Path(ALARM_DATA_DIR)
+
 # Supported file extensions for auto-discovery
 SUPPORTED_EXTENSIONS = ['.csv', '.xlsx', '.xls']
 
@@ -428,6 +437,68 @@ def scan_project_folders():
     discovered_files = {}
     
     try:
+        # Single-folder mode: scan only DATA_ROOT if configured
+        if DATA_ROOT:
+            if not DATA_ROOT.exists():
+                print(f"Configured ALARM_DATA_DIR does not exist: {DATA_ROOT}")
+                return discovered_files
+
+            # 1) Scan files directly under DATA_ROOT
+            root_folder_name = DATA_ROOT.name
+            root_files = []
+            for ext in SUPPORTED_EXTENSIONS:
+                pattern = DATA_ROOT / f"*{ext}"
+                files = glob.glob(str(pattern))
+                for file_path in files:
+                    file_path_obj = Path(file_path)
+                    try:
+                        stat = file_path_obj.stat()
+                        root_files.append({
+                            'file_path': str(file_path_obj),
+                            'filename': file_path_obj.name,
+                            'folder': root_folder_name,
+                            'size_bytes': stat.st_size,
+                            'size_mb': stat.st_size / (1024 * 1024),
+                            'modified_time': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                            'extension': file_path_obj.suffix.lower(),
+                            'file_id': f"auto_{hash(str(file_path_obj))}_{int(stat.st_mtime)}"
+                        })
+                    except Exception as e:
+                        print(f"Error processing file {file_path}: {e}")
+                        continue
+            if root_files:
+                discovered_files[root_folder_name] = root_files
+
+            # 2) Scan immediate subfolders inside DATA_ROOT
+            for folder_path in DATA_ROOT.iterdir():
+                if folder_path.is_dir() and not folder_path.name.startswith('.'):
+                    folder_name = folder_path.name
+                    folder_files = []
+                    for ext in SUPPORTED_EXTENSIONS:
+                        pattern = folder_path / f"*{ext}"
+                        files = glob.glob(str(pattern))
+                        for file_path in files:
+                            file_path_obj = Path(file_path)
+                            try:
+                                stat = file_path_obj.stat()
+                                folder_files.append({
+                                    'file_path': str(file_path_obj),
+                                    'filename': file_path_obj.name,
+                                    'folder': folder_name,
+                                    'size_bytes': stat.st_size,
+                                    'size_mb': stat.st_size / (1024 * 1024),
+                                    'modified_time': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                                    'extension': file_path_obj.suffix.lower(),
+                                    'file_id': f"auto_{hash(str(file_path_obj))}_{int(stat.st_mtime)}"
+                                })
+                            except Exception as e:
+                                print(f"Error processing file {file_path}: {e}")
+                                continue
+                    if folder_files:
+                        discovered_files[folder_name] = folder_files
+
+            return discovered_files
+
         # Get all folders in project root
         for folder_path in PROJECT_ROOT.iterdir():
             if folder_path.is_dir() and not folder_path.name.startswith('.'):
